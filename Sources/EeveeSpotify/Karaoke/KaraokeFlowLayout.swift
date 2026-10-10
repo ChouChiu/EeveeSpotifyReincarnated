@@ -45,11 +45,38 @@ private struct KaraokeFlowLayoutImpl: Layout {
     /// they're measured — is what lets placeSubviews center each row
     /// within the available width instead of starting it flush at the
     /// leading edge.
-    private struct Row {
+    struct Row {
         var indices: [Int] = []
         var sizes: [CGSize] = []
         var width: CGFloat = 0
         var height: CGFloat = 0
+    }
+
+    /// Rows for the last width laid out. The line being sung redraws every frame, but its words
+    /// never change size (all its motion is offsets and scales), so measuring them again each
+    /// frame was pure main-thread cost.
+    struct Cache {
+        var width: CGFloat?
+        var subviewCount = 0
+        var rows: [Row] = []
+    }
+
+    func makeCache(subviews: Subviews) -> Cache {
+        Cache()
+    }
+
+    func updateCache(_ cache: inout Cache, subviews: Subviews) {
+        // Kept across updates on purpose; rows(for:) re-measures when the width or word count changes.
+    }
+
+    private func rows(for subviews: Subviews, maxWidth: CGFloat, cache: inout Cache) -> [Row] {
+        if cache.width == maxWidth && cache.subviewCount == subviews.count {
+            return cache.rows
+        }
+        cache.width = maxWidth
+        cache.subviewCount = subviews.count
+        cache.rows = computeRows(subviews: subviews, maxWidth: maxWidth)
+        return cache.rows
     }
 
     private func computeRows(subviews: Subviews, maxWidth: CGFloat) -> [Row] {
@@ -76,16 +103,16 @@ private struct KaraokeFlowLayoutImpl: Layout {
         return rows
     }
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
         let maxWidth = proposal.width ?? .infinity
-        let rows = computeRows(subviews: subviews, maxWidth: maxWidth)
+        let rows = rows(for: subviews, maxWidth: maxWidth, cache: &cache)
         let totalHeight = rows.reduce(CGFloat(0)) { $0 + $1.height }
             + CGFloat(max(0, rows.count - 1)) * spacing
         return CGSize(width: maxWidth, height: totalHeight)
     }
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let rows = computeRows(subviews: subviews, maxWidth: bounds.width)
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
+        let rows = rows(for: subviews, maxWidth: bounds.width, cache: &cache)
         var y = bounds.minY
 
         for row in rows {

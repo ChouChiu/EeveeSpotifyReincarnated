@@ -179,9 +179,6 @@ private struct KaraokeSyllableTextView: View {
                     endPoint: gradientEnd
                 )
             )
-            // Rasterize first so the lift moves a bitmap by fractions of a pixel; offsetting the
-            // text itself snaps its baseline to whole pixels and the rise stutters.
-            .drawingGroup()
             .offset(y: lift)
     }
 }
@@ -222,7 +219,6 @@ private struct KaraokeEmphasizedWordView: View {
                 Text(character)
                     .font(KaraokeLineStyle.font)
                     .foregroundColor(.white)
-                    .drawingGroup()
                     .scaleEffect(1 + (motion.scale - 1) * active)
                     .offset(
                         x: CGFloat(motion.offsetX * em * active) * (isRTL ? -1 : 1),
