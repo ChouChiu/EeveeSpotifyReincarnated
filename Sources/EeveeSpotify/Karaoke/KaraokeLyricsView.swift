@@ -96,19 +96,25 @@ private struct KaraokeLyricsStage: View {
             measuringPass
             KaraokeFrameDriven(clock: clock) { frameTime in
                 let tracker = KaraokePlaybackTracker.shared
+                let reportedMs = tracker.currentPositionMs()
+                let isPlaying = tracker.isPlaying()
                 let frame = engine.frame(
                     frameTime: frameTime,
-                    reportedMs: tracker.currentPositionMs(),
-                    isPlaying: tracker.isPlaying(),
+                    reportedMs: reportedMs,
+                    isPlaying: isPlaying,
                     containerHeight: size.height,
                     blurScale: blurScale
                 )
+                let _ = KaraokeTrace.log(String(format: "FRAME ft=%.6f rep=%d play=%d cur=%d lines=%d", frameTime, reportedMs, isPlaying ? 1 : 0, frame.currentMs, frame.lines.count))
                 lines(frame: frame)
             }
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
         .onAppear { clock.start() }
-        .onDisappear { clock.stop() }
+        .onDisappear {
+            clock.stop()
+            KaraokeTrace.flushSoon()
+        }
         .contentShape(Rectangle())
         .gesture(
             DragGesture(minimumDistance: 8)

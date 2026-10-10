@@ -51,6 +51,7 @@ final class KaraokePlaybackTracker {
         if !didDumpStateShape {
             didDumpStateShape = true
             karaokeDumpClassMethods("playerState", of: state)
+            KaraokeTrace.dumpShape("playerState", of: state)
         }
 
         func safeValue(_ key: String) -> Any? {
@@ -78,6 +79,8 @@ final class KaraokePlaybackTracker {
         let positionRaw: Double = (safeValue("position") as? NSNumber)?.doubleValue ?? lastPosition
         let playbackSpeed: Double = (safeValue("playbackSpeed") as? NSNumber)?.doubleValue ?? lastPlaybackSpeed
         let isPlaying: Bool = (safeValue("isPlaying") as? Bool) ?? lastIsPlaying
+
+        KaraokeTrace.log("STATE pos=\(positionRaw) playing=\(isPlaying) speed=\(playbackSpeed) track=\(trackId ?? "-")")
 
         // A state whose item is not a music track (podcast episode, ad, local file)
         // means the previous track's lyrics no longer apply.
