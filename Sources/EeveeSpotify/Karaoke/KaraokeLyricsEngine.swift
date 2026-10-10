@@ -27,6 +27,8 @@ final class KaraokeLyricsEngine: ObservableObject {
     }
 
     struct Frame {
+        /// Playback position to draw this frame at, smoothed (see `smoothedMs`).
+        var currentMs = 0
         var lines: [LineFrame] = []
         var interlude: InterludeFrame?
         var footerY: CGFloat?
@@ -55,6 +57,10 @@ final class KaraokeLyricsEngine: ObservableObject {
     /// Where the focused line sits, as a fraction of the view height (AMLL's default).
     static let alignPosition: CGFloat = 0.35
     static let footerIndex = -1
+    /// The line being sung grows to 1.14x and resting lines sit at 0.97x, qplayer's take on
+    /// Apple Music's depth scaling; lines wrap at the narrower width so the grown line still fits.
+    static let activeScale: CGFloat = 1.14
+    static let restingScale: CGFloat = 0.97
 
     private static let minInterludeGapMs = 7000
     private static let staggerStep = 0.05
@@ -81,8 +87,8 @@ final class KaraokeLyricsEngine: ObservableObject {
     private var interludeY = KaraokeSpring(0, params: slowPosY)
     private var shownInterlude: Interlude?
 
-    private var lastClock: TimeInterval?
-    private var lastMs: Int?
+    private var lastFrameTime: TimeInterval?
+    private var displayMs: Double?
     private var lastLayoutKey: LayoutKey?
     private var wasScrolling = false
     private var lastBounds: ClosedRange<CGFloat> = 0...0
@@ -107,7 +113,7 @@ final class KaraokeLyricsEngine: ObservableObject {
 
     init(timings: [LineTiming]) {
         self.timings = timings
-        scale = timings.map { _ in KaraokeSpring(97, params: Self.scaleParams) }
+        scale = timings.map { _ in KaraokeSpring(Double(Self.restingScale * 100), params: Self.scaleParams) }
         active = timings.map { _ in KaraokeSpring(0, params: Self.fadeParams) }
         blur = timings.map { _ in KaraokeSpring(0, params: Self.fadeParams) }
     }
@@ -145,18 +151,17 @@ final class KaraokeLyricsEngine: ObservableObject {
 
     // MARK: Frame
 
-    func frame(currentMs: Int, containerHeight: CGFloat, blurScale: CGFloat) -> Frame {
+    /// - Parameters:
+    ///   - frameTime: The frame's presentation time, so motion steps evenly whenever the frame is built.
+    ///   - reportedMs: The tracker's playback position estimate.
+    func frame(frameTime: TimeInterval, reportedMs: Int, isPlaying: Bool, containerHeight: CGFloat, blurScale: CGFloat) -> Frame {
         guard !timings.isEmpty, !heights.isEmpty, containerHeight > 0 else { return Frame() }
 
         let now = Self.clock()
-        let dt = min(Self.maxFrameDelta, max(0, now - (lastClock ?? now)))
-        lastClock = now
+        let dt = min(Self.maxFrameDelta, max(0, frameTime - (lastFrameTime ?? frameTime)))
+        lastFrameTime = frameTime
 
-        let isSeek: Bool = {
-            guard let lastMs else { return false }
-            return currentMs < lastMs - 500 || currentMs > lastMs + Int(dt * 1000) + 1500
-        }()
-        lastMs = currentMs
+        let (currentMs, isSeek) = smoothedMs(reportedMs: reportedMs, isPlaying: isPlaying, dt: dt)
 
         stepUserScroll(dt: dt, now: now)
         let scrolling = isUserScrolling
@@ -190,7 +195,7 @@ final class KaraokeLyricsEngine: ObservableObject {
 
         for i in timings.indices {
             let isHighlighted = focus.highlighted?.contains(i) ?? false
-            scale[i].setTarget(isHighlighted ? 100 : 97)
+            scale[i].setTarget(Double((isHighlighted ? Self.activeScale : Self.restingScale) * 100))
             active[i].setTarget(isHighlighted ? 1 : 0)
             blur[i].setTarget(scrolling ? 0 : Double(Self.blurLevel(index: i, focus: focus, isFocused: isHighlighted) * blurScale))
 
@@ -205,6 +210,7 @@ final class KaraokeLyricsEngine: ObservableObject {
         interludeY.step(dt)
 
         var frame = Frame()
+        frame.currentMs = currentMs
         let overscan = containerHeight * 0.4
         for i in timings.indices {
             let y = CGFloat(posY[i].position)
@@ -232,6 +238,30 @@ final class KaraokeLyricsEngine: ObservableObject {
             )
         }
         return frame
+    }
+
+    // MARK: Clock
+
+    /// The tracker extrapolates between player callbacks and jumps a little whenever a new one
+    /// lands, which shows up as the fill and lift twitching. Run our own clock forward at frame
+    /// rate and ease it toward the reported position instead, never backward while playing;
+    /// only a jump of over a second (a seek) is taken at once.
+    private func smoothedMs(reportedMs: Int, isPlaying: Bool, dt: Double) -> (ms: Int, isSeek: Bool) {
+        let reported = Double(reportedMs)
+        guard var display = displayMs else {
+            displayMs = reported
+            return (reportedMs, false)
+        }
+        if isPlaying { display += dt * 1000 }
+        let error = reported - display
+        if abs(error) > 1000 {
+            displayMs = reported
+            return (reportedMs, true)
+        }
+        let corrected = display + error * min(1, dt * 4)
+        display = isPlaying ? max(display - dt * 1000 * 0.5, corrected) : corrected
+        displayMs = display
+        return (Int(display.rounded()), false)
     }
 
     // MARK: Focus

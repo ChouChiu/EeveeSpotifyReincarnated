@@ -74,8 +74,8 @@ enum KaraokeLineStyle {
 
     /// Width of the soft edge on the fill, in em.
     static let fadeWidthEm = 0.5
-    /// How far a word drifts up while sung, in em.
-    static let floatEm = 0.05
+    /// How far a syllable rises once sung, in em.
+    static let liftEm = 0.1
 }
 
 @available(iOS 15.0, *)
@@ -146,23 +146,12 @@ private struct KaraokeWordView: View {
     let isDynamic: Bool
     let isRTL: Bool
 
-    /// AMLL's float: a slow ease-out lift over the word (at least a second), held while the line
-    /// stays active and eased back down as it fades.
-    private var floatOffset: CGFloat {
-        guard isDynamic, let state else { return 0 }
-        let duration = Double(max(1000, word.endMs - word.startMs))
-        let x = clamp01(Double(state.currentMs - word.startMs) / duration)
-        let lift = KaraokeCubicBezier.easeOut.value(at: x) * state.activeAmount
-        return -CGFloat(lift * KaraokeLineStyle.floatEm) * KaraokeLineStyle.fontSize
-    }
-
     var body: some View {
         HStack(spacing: 0) {
             ForEach(Array(word.syllables.enumerated()), id: \.offset) { _, syllable in
-                KaraokeSyllableTextView(syllable: syllable, state: state, isRTL: isRTL)
+                KaraokeSyllableTextView(syllable: syllable, state: state, isDynamic: isDynamic, isRTL: isRTL)
             }
         }
-        .offset(y: floatOffset)
     }
 }
 
@@ -170,7 +159,16 @@ private struct KaraokeWordView: View {
 private struct KaraokeSyllableTextView: View {
     let syllable: KaraokeSyllableDto
     let state: KaraokeLineState?
+    let isDynamic: Bool
     let isRTL: Bool
+
+    /// Each syllable springs up as it starts and stays raised while the line is active, so the
+    /// sung part of the line sits visibly above what's still to come.
+    private var lift: CGFloat {
+        guard isDynamic, let state else { return 0 }
+        let rise = KaraokeLift.value(elapsedSeconds: Double(state.currentMs - syllable.startMs) / 1000)
+        return -CGFloat(rise * KaraokeLineStyle.liftEm * state.activeAmount) * KaraokeLineStyle.fontSize
+    }
 
     // LinearGradient never mirrors .leading/.trailing for RTL, so pick the physical edges here.
     private var gradientStart: UnitPoint { isRTL ? .trailing : .leading }
@@ -189,6 +187,7 @@ private struct KaraokeSyllableTextView: View {
                     endPoint: gradientEnd
                 )
             )
+            .offset(y: lift)
     }
 }
 
@@ -219,6 +218,8 @@ private struct KaraokeEmphasizedWordView: View {
         let elapsed = Double((state?.currentMs ?? word.startMs) - word.startMs)
         let active = state?.activeAmount ?? 0
         let em = Double(KaraokeLineStyle.fontSize)
+        // The same lift as plain syllables, with the swell riding on top of it.
+        let lift = KaraokeLift.value(elapsedSeconds: elapsed / 1000) * KaraokeLineStyle.liftEm
 
         HStack(spacing: 0) {
             ForEach(Array(emphasis.characters.enumerated()), id: \.offset) { index, character in
@@ -231,7 +232,7 @@ private struct KaraokeEmphasizedWordView: View {
                     .scaleEffect(1 + (motion.scale - 1) * active)
                     .offset(
                         x: CGFloat(motion.offsetX * em * active) * (isRTL ? -1 : 1),
-                        y: CGFloat(motion.offsetY * em * active)
+                        y: CGFloat((motion.offsetY - lift) * em * active)
                     )
                     .shadow(
                         color: .white.opacity(motion.glowAlpha * active),

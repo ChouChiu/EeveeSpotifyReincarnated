@@ -4,8 +4,6 @@ import Foundation
 struct KaraokeCubicBezier {
     let x1: Double, y1: Double, x2: Double, y2: Double
 
-    static let easeOut = KaraokeCubicBezier(x1: 0, y1: 0, x2: 0.58, y2: 1)
-
     func value(at x: Double) -> Double {
         let x = min(1, max(0, x))
         if x == 0 || x == 1 { return x }
@@ -40,6 +38,22 @@ struct KaraokeCubicBezier {
             t = (low + high) / 2
         }
         return t
+    }
+}
+
+/// Step response of a slightly underdamped spring, qplayer's per-syllable lift
+/// (TIMER-err/qplayer, LyricRowRenderer.liftSpring): rises over about a second with a hint of
+/// overshoot, then holds.
+enum KaraokeLift {
+    private static let omega = 3.7416574
+    private static let zeta = 0.935414
+
+    static func value(elapsedSeconds t: Double) -> Double {
+        guard t > 0 else { return 0 }
+        let decay = zeta * omega
+        let frequency = omega * (1 - zeta * zeta).squareRoot()
+        let envelope = exp(-decay * t)
+        return max(0, 1 - envelope * (cos(frequency * t) + decay / frequency * sin(frequency * t)))
     }
 }
 

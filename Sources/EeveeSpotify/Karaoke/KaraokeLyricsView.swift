@@ -84,6 +84,8 @@ private struct KaraokeLyricsStage: View {
     }
 
     private var lineWidth: CGFloat { max(0, size.width - horizontalPadding * 2) }
+    /// Lines wrap narrower than the column so the sung line still fits once it grows.
+    private var wrapWidth: CGFloat { lineWidth / KaraokeLyricsEngine.activeScale }
     private var alignment: HorizontalAlignment { options.textAlignment.horizontalAlignment }
     private var frameAlignment: Alignment { Alignment(horizontal: alignment, vertical: .top) }
     /// Reversed direction mirrors the list vertically: the focus sits low and lines rise from above.
@@ -94,10 +96,17 @@ private struct KaraokeLyricsStage: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             measuringPass
-            TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { _ in
-                let currentMs = KaraokePlaybackTracker.shared.currentPositionMs()
-                let frame = engine.frame(currentMs: currentMs, containerHeight: size.height, blurScale: blurScale)
-                lines(frame: frame, currentMs: currentMs)
+            // Uncapped, so ProMotion screens get even 120Hz frames rather than an uneven 60.
+            TimelineView(.animation) { context in
+                let tracker = KaraokePlaybackTracker.shared
+                let frame = engine.frame(
+                    frameTime: context.date.timeIntervalSinceReferenceDate,
+                    reportedMs: tracker.currentPositionMs(),
+                    isPlaying: tracker.isPlaying(),
+                    containerHeight: size.height,
+                    blurScale: blurScale
+                )
+                lines(frame: frame)
             }
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
@@ -122,7 +131,7 @@ private struct KaraokeLyricsStage: View {
         isReversed ? size.height - y - height : y
     }
 
-    private func lines(frame: KaraokeLyricsEngine.Frame, currentMs: Int) -> some View {
+    private func lines(frame: KaraokeLyricsEngine.Frame) -> some View {
         ZStack(alignment: .topLeading) {
             ForEach(frame.lines.filter { layouts.indices.contains($0.index) }, id: \.index) { line in
                 KaraokeLineView(
@@ -130,13 +139,14 @@ private struct KaraokeLyricsStage: View {
                     // A line at rest looks the same at any time, so give it a fixed state and let
                     // SwiftUI skip it until it wakes up.
                     state: line.activeAmount > 0.001
-                        ? KaraokeLineState(currentMs: currentMs, activeAmount: line.activeAmount)
+                        ? KaraokeLineState(currentMs: frame.currentMs, activeAmount: line.activeAmount)
                         : .resting,
-                    availableWidth: lineWidth,
+                    availableWidth: wrapWidth,
                     alignment: alignment
                 )
                 .equatable()
                 .scaleEffect(line.scale, anchor: options.textAlignment.unitPoint)
+                .frame(width: lineWidth, alignment: Alignment(horizontal: alignment, vertical: .top))
                 .blur(radius: line.blur)
                 .offset(x: horizontalPadding, y: placedY(line.y, height: lineHeight(line.index)))
             }
@@ -166,7 +176,7 @@ private struct KaraokeLyricsStage: View {
     private var measuringPass: some View {
         VStack(spacing: 0) {
             ForEach(Array(layouts.enumerated()), id: \.offset) { index, layout in
-                KaraokeLineView(layout: layout, state: nil, availableWidth: lineWidth, alignment: alignment)
+                KaraokeLineView(layout: layout, state: nil, availableWidth: wrapWidth, alignment: alignment)
                     .background(heightReader(index))
             }
             KaraokeCreditsFooterView(lyrics: lyrics)
