@@ -106,7 +106,7 @@ struct KaraokeMetalBackgroundView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> MTKView {
         let view = MTKView()
-        view.preferredFramesPerSecond = 30 // matches the lyrics TimelineView's rate; no need to run faster
+        view.preferredFramesPerSecond = 30 // a slow backdrop; no need to run faster
         view.enableSetNeedsDisplay = false
         view.isPaused = false
 

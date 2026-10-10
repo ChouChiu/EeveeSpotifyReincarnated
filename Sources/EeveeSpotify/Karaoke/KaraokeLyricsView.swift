@@ -70,7 +70,6 @@ private struct KaraokeLyricsStage: View {
 
     @StateObject private var engine: KaraokeLyricsEngine
     @StateObject private var clock = KaraokeFrameClock()
-    @State private var measuredHeights: [Int: CGFloat] = [:]
 
     private let horizontalPadding: CGFloat = 24
 
@@ -86,9 +85,9 @@ private struct KaraokeLyricsStage: View {
 
     private var lineWidth: CGFloat { max(0, size.width - horizontalPadding * 2) }
     private var alignment: HorizontalAlignment { options.textAlignment.horizontalAlignment }
-    private var frameAlignment: Alignment { Alignment(horizontal: alignment, vertical: .top) }
-    /// Reversed direction mirrors the list vertically: the focus sits low and lines rise from above.
-    private var isReversed: Bool { options.reversedDirection }
+    /// Reversed direction mirrors the list vertically: the focus sits low and lines rise from
+    /// above, and dragging runs the other way.
+    private var direction: CGFloat { options.reversedDirection ? -1 : 1 }
     /// The settings slider's default of 1.5 maps to AMLL's narrow-screen blur.
     private var blurScale: CGFloat { CGFloat(options.blurIntensity / 1.5 * 0.8) }
 
@@ -125,19 +124,16 @@ private struct KaraokeLyricsStage: View {
         )
     }
 
-    private var direction: CGFloat { isReversed ? -1 : 1 }
-
     private func placedY(_ y: CGFloat, height: CGFloat) -> CGFloat {
-        isReversed ? size.height - y - height : y
+        options.reversedDirection ? size.height - y - height : y
     }
 
     private func lines(frame: KaraokeLyricsEngine.Frame) -> some View {
         ZStack(alignment: .topLeading) {
-            ForEach(frame.lines.filter { layouts.indices.contains($0.index) }, id: \.index) { line in
+            ForEach(frame.lines, id: \.index) { line in
                 KaraokeLineView(
                     layout: layouts[line.index],
-                    // A line at rest looks the same at any time, so give it a fixed state and let
-                    // SwiftUI skip it until it wakes up.
+                    // Resting lines share one state, so SwiftUI skips them until they wake up.
                     state: line.activeAmount > 0.001
                         ? KaraokeLineState(currentMs: frame.currentMs, activeAmount: line.activeAmount)
                         : .resting,
@@ -147,7 +143,7 @@ private struct KaraokeLyricsStage: View {
                 .equatable()
                 .scaleEffect(line.scale, anchor: options.textAlignment.unitPoint)
                 .blur(radius: line.blur)
-                .offset(x: horizontalPadding, y: placedY(line.y, height: lineHeight(line.index)))
+                .offset(x: horizontalPadding, y: placedY(line.y, height: line.height))
             }
 
             if let interlude = frame.interlude {
@@ -160,22 +156,18 @@ private struct KaraokeLyricsStage: View {
                 KaraokeCreditsFooterView(lyrics: lyrics)
                     .frame(width: size.width)
                     .blur(radius: frame.footerBlur)
-                    .offset(y: placedY(footerY, height: lineHeight(KaraokeLyricsEngine.footerIndex)))
+                    .offset(y: placedY(footerY, height: frame.footerHeight))
             }
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
     }
 
-    private func lineHeight(_ index: Int) -> CGFloat {
-        measuredHeights[index] ?? 0
-    }
-
     /// Lays every line out once, invisibly and at rest, to learn its height. Kept outside the
-    /// timeline so it only reruns when the lyrics or the width change.
+    /// per-frame view so it only reruns when the lyrics or the width change.
     private var measuringPass: some View {
         VStack(spacing: 0) {
             ForEach(Array(layouts.enumerated()), id: \.offset) { index, layout in
-                KaraokeLineView(layout: layout, state: nil, availableWidth: lineWidth, alignment: alignment)
+                KaraokeLineView(layout: layout, state: .resting, availableWidth: lineWidth, alignment: alignment)
                     .background(heightReader(index))
             }
             KaraokeCreditsFooterView(lyrics: lyrics)
@@ -187,10 +179,7 @@ private struct KaraokeLyricsStage: View {
         .opacity(0)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
-        .onPreferenceChange(KaraokeLineHeightsKey.self) { heights in
-            measuredHeights = heights
-            engine.setHeights(heights)
-        }
+        .onPreferenceChange(KaraokeLineHeightsKey.self) { engine.setHeights($0) }
     }
 
     private func heightReader(_ index: Int) -> some View {

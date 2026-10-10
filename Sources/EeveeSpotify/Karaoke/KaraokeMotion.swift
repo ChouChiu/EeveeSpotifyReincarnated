@@ -130,27 +130,29 @@ struct KaraokeEmphasis {
     }
 }
 
+private extension Unicode.Scalar {
+    var isCJK: Bool {
+        switch value {
+        case 0x3040...0x30FF, // Hiragana, Katakana
+             0x3400...0x4DBF, // CJK Extension A
+             0x4E00...0x9FFF, // CJK Unified Ideographs
+             0xAC00...0xD7AF, // Hangul syllables
+             0xF900...0xFAFF, // CJK Compatibility Ideographs
+             0xFF00...0xFFEF: // Fullwidth forms
+            return true
+        default:
+            return false
+        }
+    }
+}
+
 extension String {
     var containsCJK: Bool {
-        unicodeScalars.contains { scalar in
-            switch scalar.value {
-            case 0x3040...0x30FF, // Hiragana, Katakana
-                 0x3400...0x4DBF, // CJK Extension A
-                 0x4E00...0x9FFF, // CJK Unified Ideographs
-                 0xAC00...0xD7AF, // Hangul syllables
-                 0xF900...0xFAFF, // CJK Compatibility Ideographs
-                 0xFF00...0xFFEF: // Fullwidth forms
-                return true
-            default:
-                return false
-            }
-        }
+        unicodeScalars.contains(where: \.isCJK)
     }
 
     /// Rough rendered width in em, for sizing the soft edge of the fill without measuring text.
     var estimatedWidthEm: Double {
-        unicodeScalars.reduce(0) { width, scalar in
-            String(scalar).containsCJK ? width + 1 : width + 0.55
-        }
+        unicodeScalars.reduce(0) { width, scalar in width + (scalar.isCJK ? 1 : 0.55) }
     }
 }

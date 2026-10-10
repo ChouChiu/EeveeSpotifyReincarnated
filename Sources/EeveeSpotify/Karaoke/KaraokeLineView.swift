@@ -53,12 +53,13 @@ extension KaraokeTextAlignment {
     }
 }
 
-/// Live playback state for one line. Nil renders the line at rest, as the hidden measuring pass does.
+/// Live playback state for one line.
 struct KaraokeLineState: Equatable {
     let currentMs: Int
     /// 0 at rest, 1 while sung; eased by the engine.
     let activeAmount: Double
 
+    /// A line at rest looks the same at any time, so every resting line shares this state.
     static let resting = KaraokeLineState(currentMs: 0, activeAmount: 0)
 }
 
@@ -82,7 +83,7 @@ enum KaraokeLineStyle {
 @available(iOS 15.0, *)
 struct KaraokeLineView: View, Equatable {
     let layout: KaraokeLineLayout
-    let state: KaraokeLineState?
+    let state: KaraokeLineState
     let availableWidth: CGFloat
     let alignment: HorizontalAlignment
 
@@ -98,7 +99,11 @@ struct KaraokeLineView: View, Equatable {
                 if let emphasis = word.emphasis {
                     KaraokeEmphasizedWordView(word: word, emphasis: emphasis, state: state, isRTL: layout.isRTL)
                 } else {
-                    KaraokeWordView(word: word, state: state, isDynamic: layout.isDynamic, isRTL: layout.isRTL)
+                    HStack(spacing: 0) {
+                        ForEach(Array(word.syllables.enumerated()), id: \.offset) { _, syllable in
+                            KaraokeSyllableTextView(syllable: syllable, state: state, isDynamic: layout.isDynamic, isRTL: layout.isRTL)
+                        }
+                    }
                 }
             }
         }
@@ -125,8 +130,7 @@ private func fillProgress(startMs: Int, endMs: Int, currentMs: Int) -> Double {
 /// Gradient stops for a fill sweeping across a span: sung alpha behind the edge, unsung ahead of
 /// it, with a soft edge `fade` wide (a fraction of the span). The edge enters fully off the
 /// leading side at 0 and leaves fully off the trailing side at 1, as AMLL's mask does.
-private func fillStops(progress: Double, fade: Double, state: KaraokeLineState?) -> [Gradient.Stop] {
-    let active = state?.activeAmount ?? 0
+private func fillStops(progress: Double, fade: Double, active: Double) -> [Gradient.Stop] {
     let bright = lerp(KaraokeLineStyle.restingAlpha, KaraokeLineStyle.sungAlpha, active)
     let dark = lerp(KaraokeLineStyle.restingAlpha, KaraokeLineStyle.unsungAlpha, active)
     let edge = progress * (1 + fade)
@@ -141,32 +145,16 @@ private func fillStops(progress: Double, fade: Double, state: KaraokeLineState?)
 }
 
 @available(iOS 15.0, *)
-private struct KaraokeWordView: View {
-    let word: KaraokeWordLayout
-    let state: KaraokeLineState?
-    let isDynamic: Bool
-    let isRTL: Bool
-
-    var body: some View {
-        HStack(spacing: 0) {
-            ForEach(Array(word.syllables.enumerated()), id: \.offset) { _, syllable in
-                KaraokeSyllableTextView(syllable: syllable, state: state, isDynamic: isDynamic, isRTL: isRTL)
-            }
-        }
-    }
-}
-
-@available(iOS 15.0, *)
 private struct KaraokeSyllableTextView: View {
     let syllable: KaraokeSyllableDto
-    let state: KaraokeLineState?
+    let state: KaraokeLineState
     let isDynamic: Bool
     let isRTL: Bool
 
     /// Each syllable eases up from its start and stays raised while the line is active, so the
     /// sung part of the line sits visibly above what's still to come.
     private var lift: CGFloat {
-        guard isDynamic, let state else { return 0 }
+        guard isDynamic else { return 0 }
         let rise = KaraokeLift.value(
             elapsedMs: Double(state.currentMs - syllable.startMs),
             durationMs: Double(syllable.endMs - syllable.startMs)
@@ -179,14 +167,14 @@ private struct KaraokeSyllableTextView: View {
     private var gradientEnd: UnitPoint { isRTL ? .leading : .trailing }
 
     var body: some View {
-        let progress = state.map { fillProgress(startMs: syllable.startMs, endMs: syllable.endMs, currentMs: $0.currentMs) } ?? 0
+        let progress = fillProgress(startMs: syllable.startMs, endMs: syllable.endMs, currentMs: state.currentMs)
         let fade = min(1, max(0.08, KaraokeLineStyle.fadeWidthEm / max(0.5, syllable.text.estimatedWidthEm)))
 
         Text(syllable.text)
             .font(KaraokeLineStyle.font)
             .foregroundStyle(
                 LinearGradient(
-                    stops: fillStops(progress: progress, fade: fade, state: state),
+                    stops: fillStops(progress: progress, fade: fade, active: state.activeAmount),
                     startPoint: gradientStart,
                     endPoint: gradientEnd
                 )
@@ -204,7 +192,7 @@ private struct KaraokeSyllableTextView: View {
 private struct KaraokeEmphasizedWordView: View {
     let word: KaraokeWordLayout
     let emphasis: KaraokeEmphasis
-    let state: KaraokeLineState?
+    let state: KaraokeLineState
     let isRTL: Bool
 
     /// Room around the word so the mask doesn't clip swollen characters or their glow.
@@ -212,7 +200,6 @@ private struct KaraokeEmphasizedWordView: View {
 
     /// Word fill progress, weighting each syllable by its share of the characters.
     private var progress: Double {
-        guard let state else { return 0 }
         let total = word.syllables.reduce(0) { $0 + $1.text.count }
         guard total > 0 else { return fillProgress(startMs: word.startMs, endMs: word.endMs, currentMs: state.currentMs) }
         return word.syllables.reduce(0) { sum, syllable in
@@ -222,8 +209,8 @@ private struct KaraokeEmphasizedWordView: View {
     }
 
     var body: some View {
-        let elapsed = Double((state?.currentMs ?? word.startMs) - word.startMs)
-        let active = state?.activeAmount ?? 0
+        let elapsed = Double(state.currentMs - word.startMs)
+        let active = state.activeAmount
         let em = Double(KaraokeLineStyle.fontSize)
         // The same lift as plain syllables, with the swell riding on top of it.
         let lift = KaraokeLift.value(elapsedMs: elapsed, durationMs: Double(word.endMs - word.startMs))
@@ -231,9 +218,7 @@ private struct KaraokeEmphasizedWordView: View {
 
         HStack(spacing: 0) {
             ForEach(Array(emphasis.characters.enumerated()), id: \.offset) { index, character in
-                let motion = state == nil
-                    ? KaraokeEmphasis.CharacterState()
-                    : emphasis.state(forCharacter: index, elapsedMs: elapsed)
+                let motion = emphasis.state(forCharacter: index, elapsedMs: elapsed)
                 Text(character)
                     .font(KaraokeLineStyle.font)
                     .foregroundColor(.white)
@@ -258,12 +243,12 @@ private struct KaraokeEmphasizedWordView: View {
             let total = width + maskBleed * 2
             // Express the sweep across the word in the coordinates of the wider mask.
             let fade = Double(KaraokeLineStyle.fadeWidthEm * KaraokeLineStyle.fontSize / width)
-            let stops = fillStops(progress: progress, fade: fade, state: state).map { stop in
+            // Colours past the first and last stop extend to the mask's edges by themselves.
+            let stops = fillStops(progress: progress, fade: fade, active: state.activeAmount).map { stop in
                 Gradient.Stop(color: stop.color, location: (maskBleed + stop.location * width) / total)
             }
             LinearGradient(
-                stops: [Gradient.Stop(color: stops[0].color, location: 0)] + stops
-                    + [Gradient.Stop(color: stops[stops.count - 1].color, location: 1)],
+                stops: stops,
                 startPoint: isRTL ? .trailing : .leading,
                 endPoint: isRTL ? .leading : .trailing
             )

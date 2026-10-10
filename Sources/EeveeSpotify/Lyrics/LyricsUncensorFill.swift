@@ -169,7 +169,7 @@ struct LyricsUncensorFill {
     }
 
     /// Walks the line's syllables, grouping them into words the same way
-    /// the rendering layer does (KaraokeLineView's `words` grouping — a
+    /// the rendering layer does (KaraokeLineDto's `words` grouping — a
     /// syllable joins the current group when the *previous* syllable's
     /// IsPartOfWord flag was true, since the flag is forward-looking; see
     /// KaraokeSyllableDto's doc comment), and replaces any word whose plain

@@ -14,6 +14,7 @@ final class KaraokeLyricsEngine: ObservableObject {
     struct LineFrame {
         let index: Int
         let y: CGFloat
+        let height: CGFloat
         let scale: CGFloat
         let blur: CGFloat
         /// 0 for a resting line, 1 for one being sung; eased between the two.
@@ -32,6 +33,7 @@ final class KaraokeLyricsEngine: ObservableObject {
         var lines: [LineFrame] = []
         var interlude: InterludeFrame?
         var footerY: CGFloat?
+        var footerHeight: CGFloat = 0
         var footerBlur: CGFloat = 0
     }
 
@@ -91,6 +93,7 @@ final class KaraokeLyricsEngine: ObservableObject {
     private var lastFrameTime: TimeInterval?
     private var displayMs: Double?
     private var lastLayoutKey: LayoutKey?
+    private var lastFocal: Focal?
     private var wasScrolling = false
     private var lastBounds: ClosedRange<CGFloat> = 0...0
 
@@ -135,7 +138,7 @@ final class KaraokeLyricsEngine: ObservableObject {
             momentum = nil
         }
         userOffset = clampOffset((dragBase ?? 0) + translation)
-        lastUserScroll = Self.clock()
+        lastUserScroll = Self.now()
     }
 
     func dragEnded(translation: CGFloat, predictedTranslation: CGFloat) {
@@ -143,29 +146,23 @@ final class KaraokeLyricsEngine: ObservableObject {
         var spring = KaraokeSpring(Double(userOffset), params: Self.momentumParams)
         spring.setTarget(Double(clampOffset(userOffset + (predictedTranslation - translation))))
         momentum = spring
-        lastUserScroll = Self.clock()
-    }
-
-    var isUserScrolling: Bool {
-        dragBase != nil || momentum != nil || Self.clock() - lastUserScroll < Self.userScrollHoldSeconds
+        lastUserScroll = Self.now()
     }
 
     // MARK: Frame
 
     /// - Parameters:
-    ///   - frameTime: The frame's presentation time, so motion steps evenly whenever the frame is built.
+    ///   - frameTime: When the frame will be shown, on the same clock as `now()`, so motion steps
+    ///     evenly whenever the frame is built.
     ///   - reportedMs: The tracker's playback position estimate.
     func frame(frameTime: TimeInterval, reportedMs: Int, isPlaying: Bool, containerHeight: CGFloat, blurScale: CGFloat) -> Frame {
         guard !timings.isEmpty, !heights.isEmpty, containerHeight > 0 else { return Frame() }
 
-        let now = Self.clock()
         let dt = min(Self.maxFrameDelta, max(0, frameTime - (lastFrameTime ?? frameTime)))
         lastFrameTime = frameTime
 
         let (currentMs, isSeek) = smoothedMs(reportedMs: reportedMs, isPlaying: isPlaying, dt: dt)
-
-        stepUserScroll(dt: dt, now: now)
-        let scrolling = isUserScrolling
+        let scrolling = stepUserScroll(dt: dt, now: frameTime)
 
         let focus = Self.resolveFocus(timings, at: currentMs)
         let layout = computeLayout(focus: focus, containerHeight: containerHeight)
@@ -215,12 +212,14 @@ final class KaraokeLyricsEngine: ObservableObject {
         let overscan = containerHeight * 0.4
         for i in timings.indices {
             let y = CGFloat(posY[i].position)
-            guard y + height(i) >= -overscan, y <= containerHeight + overscan else { continue }
+            let lineHeight = height(i)
+            guard y + lineHeight >= -overscan, y <= containerHeight + overscan else { continue }
             frame.lines.append(LineFrame(
                 index: i,
                 y: y,
+                height: lineHeight,
                 scale: CGFloat(scale[i].position / 100),
-                blur: min(Self.maxBlur, max(0, CGFloat(blur[i].position))),
+                blur: Self.clampBlur(blur[i].position),
                 activeAmount: min(1, max(0, active[i].position))
             ))
         }
@@ -228,7 +227,8 @@ final class KaraokeLyricsEngine: ObservableObject {
         let footer = CGFloat(footerY.position)
         if footer <= containerHeight + overscan {
             frame.footerY = footer
-            frame.footerBlur = min(Self.maxBlur, max(0, CGFloat(footerBlur.position)))
+            frame.footerHeight = height(Self.footerIndex)
+            frame.footerBlur = Self.clampBlur(footerBlur.position)
         }
 
         if let interlude = shownInterlude {
@@ -328,8 +328,6 @@ final class KaraokeLyricsEngine: ObservableObject {
         var bounds: ClosedRange<CGFloat>
     }
 
-    private var lastFocal: Focal?
-
     private func height(_ index: Int) -> CGFloat {
         heights[index] ?? Self.defaultLineHeight
     }
@@ -389,13 +387,19 @@ final class KaraokeLyricsEngine: ObservableObject {
         footerY.setTarget(Double(layout.footerY), params: params, delay: delay)
     }
 
+    /// New dots appear in place; dots already showing follow their slot as lines move.
     private func updateInterlude(_ interlude: Interlude?, y: CGFloat?) {
-        if interlude != shownInterlude, let y {
+        defer { shownInterlude = interlude }
+        guard let y else { return }
+        if interlude != shownInterlude {
             interludeY.snap(to: Double(y))
-        } else if let y {
+        } else {
             interludeY.setTarget(Double(y))
         }
-        shownInterlude = interlude
+    }
+
+    private static func clampBlur(_ value: Double) -> CGFloat {
+        min(maxBlur, max(0, CGFloat(value)))
     }
 
     // MARK: User scroll
@@ -404,7 +408,8 @@ final class KaraokeLyricsEngine: ObservableObject {
         min(max(offset, lastBounds.lowerBound), lastBounds.upperBound)
     }
 
-    private func stepUserScroll(dt: Double, now: TimeInterval) {
+    /// Advances any fling and returns whether the user is still in control of the scroll.
+    private func stepUserScroll(dt: Double, now: TimeInterval) -> Bool {
         if var spring = momentum {
             spring.step(dt)
             userOffset = clampOffset(CGFloat(spring.position))
@@ -421,9 +426,11 @@ final class KaraokeLyricsEngine: ObservableObject {
             userOffset = 0
             frozenFocal = nil
         }
+        return dragBase != nil || momentum != nil || now - lastUserScroll < Self.userScrollHoldSeconds
     }
 
-    private static func clock() -> TimeInterval {
+    /// Host uptime, the clock CADisplayLink timestamps use, so gesture times compare with frame times.
+    private static func now() -> TimeInterval {
         ProcessInfo.processInfo.systemUptime
     }
 }
