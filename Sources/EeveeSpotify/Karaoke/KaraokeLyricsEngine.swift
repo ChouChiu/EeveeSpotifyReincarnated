@@ -52,15 +52,16 @@ final class KaraokeLyricsEngine: ObservableObject {
         var interlude: Interlude?
     }
 
-    static let lineSpacing: CGFloat = 24
+    static let lineSpacing: CGFloat = 18
     static let interludeHeight: CGFloat = 44
     /// Where the focused line sits, as a fraction of the view height (AMLL's default).
     static let alignPosition: CGFloat = 0.35
     static let footerIndex = -1
-    /// The line being sung grows to 1.14x and resting lines sit at 0.97x, qplayer's take on
-    /// Apple Music's depth scaling; lines wrap at the narrower width so the grown line still fits.
-    static let activeScale: CGFloat = 1.14
-    static let restingScale: CGFloat = 0.97
+    /// qplayer's take on Apple Music's depth scaling has the sung line 1.14x the size of resting
+    /// lines (0.97x). Lines are drawn at the sung size and resting ones shrunk, so the line being
+    /// read is never an upscaled bitmap.
+    static let activeScale: CGFloat = 1
+    static let restingScale: CGFloat = 0.97 / 1.14
 
     private static let minInterludeGapMs = 7000
     private static let staggerStep = 0.05

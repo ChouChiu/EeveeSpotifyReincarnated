@@ -41,19 +41,18 @@ struct KaraokeCubicBezier {
     }
 }
 
-/// Step response of a slightly underdamped spring, qplayer's per-syllable lift
-/// (TIMER-err/qplayer, LyricRowRenderer.liftSpring): rises over about a second with a hint of
-/// overshoot, then holds.
+/// qplayer's eased syllable lift (TIMER-err/qplayer, LyricRowRenderer.syllableAnimation): a cubic
+/// ease-out over the syllable's length, but never quicker than a second. Neighbouring syllables
+/// rise over heavily overlapping windows, so the sung part of a line climbs as one smooth ramp
+/// instead of each syllable hopping up on its own.
 enum KaraokeLift {
-    private static let omega = 3.7416574
-    private static let zeta = 0.935414
+    private static let minDurationMs = 1000.0
 
-    static func value(elapsedSeconds t: Double) -> Double {
-        guard t > 0 else { return 0 }
-        let decay = zeta * omega
-        let frequency = omega * (1 - zeta * zeta).squareRoot()
-        let envelope = exp(-decay * t)
-        return max(0, 1 - envelope * (cos(frequency * t) + decay / frequency * sin(frequency * t)))
+    static func value(elapsedMs: Double, durationMs: Double) -> Double {
+        guard elapsedMs > 0 else { return 0 }
+        let x = min(1, elapsedMs / max(minDurationMs, durationMs))
+        let remaining = 1 - x
+        return 1 - remaining * remaining * remaining
     }
 }
 

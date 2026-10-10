@@ -63,7 +63,8 @@ struct KaraokeLineState: Equatable {
 }
 
 enum KaraokeLineStyle {
-    static let fontSize: CGFloat = 28
+    /// The size of the line being sung; resting lines are scaled down from it (see KaraokeLyricsEngine).
+    static let fontSize: CGFloat = 32
     static let font = Font.system(size: fontSize, weight: .bold)
 
     /// Text alpha for a line at rest, and for the sung / unsung parts of the line being sung
@@ -162,11 +163,14 @@ private struct KaraokeSyllableTextView: View {
     let isDynamic: Bool
     let isRTL: Bool
 
-    /// Each syllable springs up as it starts and stays raised while the line is active, so the
+    /// Each syllable eases up from its start and stays raised while the line is active, so the
     /// sung part of the line sits visibly above what's still to come.
     private var lift: CGFloat {
         guard isDynamic, let state else { return 0 }
-        let rise = KaraokeLift.value(elapsedSeconds: Double(state.currentMs - syllable.startMs) / 1000)
+        let rise = KaraokeLift.value(
+            elapsedMs: Double(state.currentMs - syllable.startMs),
+            durationMs: Double(syllable.endMs - syllable.startMs)
+        )
         return -CGFloat(rise * KaraokeLineStyle.liftEm * state.activeAmount) * KaraokeLineStyle.fontSize
     }
 
@@ -187,6 +191,9 @@ private struct KaraokeSyllableTextView: View {
                     endPoint: gradientEnd
                 )
             )
+            // Rasterize first so the lift moves a bitmap by fractions of a pixel; offsetting the
+            // text itself snaps its baseline to whole pixels and the rise stutters.
+            .drawingGroup()
             .offset(y: lift)
     }
 }
@@ -219,7 +226,8 @@ private struct KaraokeEmphasizedWordView: View {
         let active = state?.activeAmount ?? 0
         let em = Double(KaraokeLineStyle.fontSize)
         // The same lift as plain syllables, with the swell riding on top of it.
-        let lift = KaraokeLift.value(elapsedSeconds: elapsed / 1000) * KaraokeLineStyle.liftEm
+        let lift = KaraokeLift.value(elapsedMs: elapsed, durationMs: Double(word.endMs - word.startMs))
+            * KaraokeLineStyle.liftEm
 
         HStack(spacing: 0) {
             ForEach(Array(emphasis.characters.enumerated()), id: \.offset) { index, character in
@@ -229,6 +237,7 @@ private struct KaraokeEmphasizedWordView: View {
                 Text(character)
                     .font(KaraokeLineStyle.font)
                     .foregroundColor(.white)
+                    .drawingGroup()
                     .scaleEffect(1 + (motion.scale - 1) * active)
                     .offset(
                         x: CGFloat(motion.offsetX * em * active) * (isRTL ? -1 : 1),
