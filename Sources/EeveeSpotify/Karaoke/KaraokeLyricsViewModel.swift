@@ -8,6 +8,8 @@ final class KaraokeLyricsViewModel: ObservableObject {
     @Published private(set) var trackId: String?
     @Published private(set) var lyrics: KaraokeLyricsDto?
     @Published private(set) var layouts: [KaraokeLineLayout] = []
+    /// Bumped whenever the lyrics are replaced, so the view rebuilds its layout and springs.
+    @Published private(set) var generation = 0
 
     private let onNoLyrics: () -> Void
     private var observer: NSObjectProtocol?
@@ -32,11 +34,12 @@ final class KaraokeLyricsViewModel: ObservableObject {
     }
 
     private func apply(_ lyrics: KaraokeLyricsDto?) {
+        generation += 1
         self.lyrics = lyrics
         let songIsRTL = lyrics?.isRTL ?? false
         layouts = lyrics?.lines.map { line in
             let direction = line.strongDirection
-            return KaraokeLineLayout(words: line.words, isRTL: direction.map { $0 == .rightToLeft } ?? songIsRTL)
+            return KaraokeLineLayout(line: line, isRTL: direction.map { $0 == .rightToLeft } ?? songIsRTL)
         } ?? []
     }
 

@@ -20,39 +20,14 @@ struct KaraokeLyricsView: View {
                     KaraokeBackgroundView()
                 }
                 if let lyrics = model.lyrics {
-                    content(lyrics: lyrics, layouts: model.layouts, screenWidth: geo.size.width)
-                        // A new song starts from its own scroll position and state.
-                        .id(model.trackId)
+                    KaraokeLyricsStage(lyrics: lyrics, layouts: model.layouts, options: options, size: geo.size)
+                        // New lyrics (a new song, or the same song re-fetched) start from their own layout and springs.
+                        .id(model.generation)
                 }
                 closeButton
             }
         }
         .preferredColorScheme(.dark)
-    }
-
-    private func content(lyrics: KaraokeLyricsDto, layouts: [KaraokeLineLayout], screenWidth: CGFloat) -> some View {
-        TimelineView(.periodic(from: .now, by: 1.0 / 30.0)) { _ in
-            let currentMs = KaraokePlaybackTracker.shared.currentPositionMs()
-
-            KaraokeScrollingLines(
-                lyrics: lyrics,
-                layouts: layouts,
-                options: options,
-                currentMs: currentMs,
-                activeLineIndex: activeLineIndex(in: lyrics, at: currentMs),
-                screenWidth: screenWidth
-            )
-        }
-    }
-
-    private func activeLineIndex(in lyrics: KaraokeLyricsDto, at currentMs: Int) -> Int? {
-        guard !lyrics.lines.isEmpty else { return nil }
-        for (index, line) in lyrics.lines.enumerated().reversed() {
-            if currentMs >= line.startMs {
-                return index
-            }
-        }
-        return nil
     }
 
     @ViewBuilder private var closeButtonBackground: some View {
@@ -76,59 +51,142 @@ struct KaraokeLyricsView: View {
     }
 }
 
+private struct KaraokeLineHeightsKey: PreferenceKey {
+    static var defaultValue: [Int: CGFloat] = [:]
+
+    static func reduce(value: inout [Int: CGFloat], nextValue: () -> [Int: CGFloat]) {
+        value.merge(nextValue()) { $1 }
+    }
+}
+
+/// Lines laid out by hand rather than in a ScrollView: each one is placed every frame from its own
+/// springs (see KaraokeLyricsEngine), which is what lets them move independently.
 @available(iOS 15.0, *)
-private struct KaraokeScrollingLines: View {
+private struct KaraokeLyricsStage: View {
     let lyrics: KaraokeLyricsDto
     let layouts: [KaraokeLineLayout]
     let options: KaraokeOptions
-    let currentMs: Int
-    let activeLineIndex: Int?
-    let screenWidth: CGFloat
+    let size: CGSize
+
+    @StateObject private var engine: KaraokeLyricsEngine
+    @State private var measuredHeights: [Int: CGFloat] = [:]
 
     private let horizontalPadding: CGFloat = 24
 
+    init(lyrics: KaraokeLyricsDto, layouts: [KaraokeLineLayout], options: KaraokeOptions, size: CGSize) {
+        self.lyrics = lyrics
+        self.layouts = layouts
+        self.options = options
+        self.size = size
+        _engine = StateObject(wrappedValue: KaraokeLyricsEngine(
+            timings: lyrics.lines.map { KaraokeLyricsEngine.LineTiming(startMs: $0.startMs, endMs: $0.endMs) }
+        ))
+    }
+
+    private var lineWidth: CGFloat { max(0, size.width - horizontalPadding * 2) }
+    private var alignment: HorizontalAlignment { options.textAlignment.horizontalAlignment }
+    private var frameAlignment: Alignment { Alignment(horizontal: alignment, vertical: .top) }
+    /// Reversed direction mirrors the list vertically: the focus sits low and lines rise from above.
+    private var isReversed: Bool { options.reversedDirection }
+    /// The settings slider's default of 1.5 maps to AMLL's narrow-screen blur.
+    private var blurScale: CGFloat { CGFloat(options.blurIntensity / 1.5 * 0.8) }
+
     var body: some View {
-        let alignment = options.textAlignment.horizontalAlignment
-        let flip: CGFloat = options.reversedDirection ? -1 : 1
-
-        ScrollViewReader { proxy in
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: alignment, spacing: 28) {
-                    Spacer().frame(height: 80)
-
-                    ForEach(Array(layouts.enumerated()), id: \.offset) { index, layout in
-                        KaraokeLineView(
-                            layout: layout,
-                            currentMs: currentMs,
-                            isActiveLine: index == activeLineIndex,
-                            availableWidth: max(0, screenWidth - horizontalPadding * 2),
-                            alignment: alignment
-                        )
-                        .id(index)
-                        .padding(.horizontal, horizontalPadding)
-                        .scaleEffect(x: 1, y: flip)
-                    }
-
-                    KaraokeCreditsFooterView(lyrics: lyrics)
-                        .scaleEffect(x: 1, y: flip)
-
-                    Spacer().frame(height: 200)
+        ZStack(alignment: .topLeading) {
+            measuringPass
+            TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { _ in
+                let currentMs = KaraokePlaybackTracker.shared.currentPositionMs()
+                let frame = engine.frame(currentMs: currentMs, containerHeight: size.height, blurScale: blurScale)
+                lines(frame: frame, currentMs: currentMs)
+            }
+        }
+        .frame(width: size.width, height: size.height, alignment: .topLeading)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 8)
+                .onChanged { value in
+                    engine.dragChanged(translation: direction * value.translation.height)
                 }
-                .frame(maxWidth: .infinity)
-            }
-            .onAppear {
-                guard let activeLineIndex = activeLineIndex, activeLineIndex < lyrics.lines.count else { return }
-                proxy.scrollTo(activeLineIndex, anchor: .center)
-            }
-            .onChange(of: activeLineIndex) { newIndex in
-                guard let newIndex = newIndex, newIndex < lyrics.lines.count else { return }
-                // Single-curve stand-in for SpicyLyrics' overshoot scroll.
-                withAnimation(.timingCurve(0.3, 1.4, 0.7, 1.0, duration: 0.8)) {
-                    proxy.scrollTo(newIndex, anchor: .center)
+                .onEnded { value in
+                    engine.dragEnded(
+                        translation: direction * value.translation.height,
+                        predictedTranslation: direction * value.predictedEndTranslation.height
+                    )
                 }
+        )
+    }
+
+    private var direction: CGFloat { isReversed ? -1 : 1 }
+
+    private func placedY(_ y: CGFloat, height: CGFloat) -> CGFloat {
+        isReversed ? size.height - y - height : y
+    }
+
+    private func lines(frame: KaraokeLyricsEngine.Frame, currentMs: Int) -> some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(frame.lines.filter { layouts.indices.contains($0.index) }, id: \.index) { line in
+                KaraokeLineView(
+                    layout: layouts[line.index],
+                    // A line at rest looks the same at any time, so give it a fixed state and let
+                    // SwiftUI skip it until it wakes up.
+                    state: line.activeAmount > 0.001
+                        ? KaraokeLineState(currentMs: currentMs, activeAmount: line.activeAmount)
+                        : .resting,
+                    availableWidth: lineWidth,
+                    alignment: alignment
+                )
+                .equatable()
+                .scaleEffect(line.scale, anchor: options.textAlignment.unitPoint)
+                .blur(radius: line.blur)
+                .offset(x: horizontalPadding, y: placedY(line.y, height: lineHeight(line.index)))
             }
-            // Flip the list and counter-flip rows; y-only so leading/trailing alignment isn't mirrored.
-            .scaleEffect(x: 1, y: flip)
+
+            if let interlude = frame.interlude {
+                KaraokeInterludeDotsView(elapsedMs: interlude.elapsedMs, durationMs: interlude.durationMs)
+                    .frame(width: lineWidth, height: KaraokeLyricsEngine.interludeHeight, alignment: Alignment(horizontal: alignment, vertical: .center))
+                    .offset(x: horizontalPadding, y: placedY(interlude.y, height: KaraokeLyricsEngine.interludeHeight))
+            }
+
+            if let footerY = frame.footerY {
+                KaraokeCreditsFooterView(lyrics: lyrics)
+                    .frame(width: size.width)
+                    .blur(radius: frame.footerBlur)
+                    .offset(y: placedY(footerY, height: lineHeight(KaraokeLyricsEngine.footerIndex)))
+            }
+        }
+        .frame(width: size.width, height: size.height, alignment: .topLeading)
+    }
+
+    private func lineHeight(_ index: Int) -> CGFloat {
+        measuredHeights[index] ?? 0
+    }
+
+    /// Lays every line out once, invisibly and at rest, to learn its height. Kept outside the
+    /// timeline so it only reruns when the lyrics or the width change.
+    private var measuringPass: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(layouts.enumerated()), id: \.offset) { index, layout in
+                KaraokeLineView(layout: layout, state: nil, availableWidth: lineWidth, alignment: alignment)
+                    .background(heightReader(index))
+            }
+            KaraokeCreditsFooterView(lyrics: lyrics)
+                .frame(width: size.width)
+                .background(heightReader(KaraokeLyricsEngine.footerIndex))
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(width: size.width, height: 0, alignment: .top)
+        .opacity(0)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+        .onPreferenceChange(KaraokeLineHeightsKey.self) { heights in
+            measuredHeights = heights
+            engine.setHeights(heights)
+        }
+    }
+
+    private func heightReader(_ index: Int) -> some View {
+        GeometryReader { geometry in
+            Color.clear.preference(key: KaraokeLineHeightsKey.self, value: [index: geometry.size.height])
         }
     }
 }
