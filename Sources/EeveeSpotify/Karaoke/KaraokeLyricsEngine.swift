@@ -71,6 +71,11 @@ final class KaraokeLyricsEngine: ObservableObject {
     private static let defaultLineHeight: CGFloat = 40
     private static let maxFrameDelta = 0.1
     private static let maxBlur: CGFloat = 12
+    /// How far past the screen edges lines are still drawn. Lines slide in from wherever their
+    /// springs have them, so only the blur spilling past a line's edge needs room. Drawing more
+    /// costs real frames: a device trace showed frame drops climbing from ~0% at 16 lines on
+    /// screen to ~30% at 26.
+    private static let overscan: CGFloat = 40
 
     private static let slowPosY = KaraokeSpring.Params(mass: 0.9, stiffness: 90, damping: 15)
     private static let scaleParams = KaraokeSpring.Params(mass: 2, stiffness: 100, damping: 25)
@@ -209,7 +214,7 @@ final class KaraokeLyricsEngine: ObservableObject {
 
         var frame = Frame()
         frame.currentMs = currentMs
-        let overscan = containerHeight * 0.4
+        let overscan = Self.overscan
         for i in timings.indices {
             let y = CGFloat(posY[i].position)
             let lineHeight = height(i)
